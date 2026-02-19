@@ -1,107 +1,113 @@
-# ML Pipeline Deployment
+# Late Delivery Prediction ML Pipeline
 
-Complete ML pipeline for late delivery prediction: ETL, training, inference, and a Next.js app for testing.
+End-to-end ML system that predicts which orders are likely to be delivered late. The project includes data validation, ETL into a warehouse table, model training, batch inference, and a Next.js UI for exploring results.
 
-## Quick Start
+**Project Snapshot**
+- Goal: predict late deliveries to help operations prioritize at-risk orders.
+- Data: SQLite operational DB (`data/shop.db`) plus a derived warehouse (`data/warehouse.db`).
+- Output: predictions stored in `order_predictions` and surfaced in the web app.
+- Stack: Python, pandas, scikit-learn, SQLite, Next.js, AWS SAM (Lambda, EventBridge, S3, API Gateway).
 
-### 1. Python environment
-
-```bash
-pip install -r requirements.txt
+**Architecture**
+```mermaid
+flowchart LR
+  A[Validate schema] --> B[ETL to warehouse]
+  B --> C[Train model]
+  C --> D[Batch inference]
+  D --> E[Write predictions to shop.db]
+  E --> F[Next.js app reads API]
 ```
 
-### 2. Run pipeline once (creates warehouse, trains model, runs inference)
+Pipeline entrypoint: `jobs/run_scheduled_pipeline.py`
+- `jobs/1_validate_schema.py` checks the operational DB before ETL.
+- `jobs/2_etl_build_warehouse.py` builds `fact_orders_ml` in `warehouse.db`.
+- `jobs/3_train_model.py` trains and saves model artifacts in `artifacts/`.
+- `jobs/4_run_inference.py` scores unfulfilled orders and writes predictions.
 
-```bash
-python3 jobs/run_scheduled_pipeline.py
-```
-
-Or from the app directory:
-
-```bash
-cd app && npm run setup
-```
-
-### 3. Start the Next.js app
-
-```bash
-cd app && npm install && npm run dev
-```
-
-Open http://localhost:3000
-
-## Project Structure
-
-- `data/shop.db` — Operational database
-- `data/warehouse.db` — Analytical warehouse (fact_orders_ml)
-- `artifacts/` — Model (.sav), metadata, metrics
-- `jobs/` — Python pipeline scripts
-- `app/` — Next.js application
-
-## Scheduling (Cron)
-
-To run the pipeline daily at 1:00 AM:
-
-### Mac/Linux
-
-```bash
-crontab -e
-```
-
-Add:
-
-```
-0 1 * * * cd /path/to/Dalton_Mason_ML_Pipeline_Deployment && /path/to/venv/bin/python jobs/run_scheduled_pipeline.py >> logs/pipeline.log 2>&1
-```
-
-Replace:
-- `/path/to/Dalton_Mason_ML_Pipeline_Deployment` with the actual project path
-- `/path/to/venv/bin/python` with your Python executable (or `python3` if in PATH)
-
-### Create logs directory
-
-```bash
-mkdir -p logs
-```
-
-## S3 + Lambda Deployment
-
-For cloud deployment (S3 static site, API Gateway, Lambda, EventBridge scheduler):
-
-1. See [DEPLOY.md](DEPLOY.md) for full instructions
-2. Run `sam build && sam deploy --guided`
-3. Seed the data bucket with `shop.db` and `artifacts/`
-4. Build the static app with `NEXT_PUBLIC_API_BASE_URL=<ApiBaseUrl>` and upload to the static bucket
-
-The pipeline runs automatically at **1:00 AM UTC daily** via EventBridge.
-
-## Local Development (with API)
-
-For local dev, the app needs an API to serve customers, orders, and run scoring. **Use the local dev API server**:
-
-1. In `app/`, create `.env.local` with:
+**Quick Start (Local)**
+1. Install Python dependencies:
+   ```bash
+   pip install -r requirements.txt
    ```
-   NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
+2. Run the pipeline once:
+   ```bash
+   python3 jobs/run_scheduled_pipeline.py
    ```
-   (See `app/.env.local.example`.)
-
-2. Run both the API server and Next.js:
+3. Start the app with the local API server:
    ```bash
    cd app
+   cp .env.local.example .env.local
+   npm install
    npm run dev:all
    ```
-   Or run in two terminals:
-   - Terminal 1: `cd app && npm run dev:api`
-   - Terminal 2: `cd app && npm run dev`
+4. Open `http://localhost:3000`.
 
-3. Open http://localhost:3000 — customers, place order, and run scoring will work.
+**Repository Map**
+- `jobs/` pipeline steps (validation, ETL, training, inference).
+- `jobs/features.py` shared feature engineering used by ETL and inference.
+- `data/shop.db` operational database.
+- `data/warehouse.db` analytical warehouse with `fact_orders_ml`.
+- `artifacts/` trained model, metadata, and metrics JSON.
+- `app/` Next.js UI and local API server.
+- `lambdas/` AWS Lambda handlers for API and pipeline.
+- `template.yaml` AWS SAM infrastructure for API, pipeline, and scheduler.
+- `DEPLOY.md` cloud deployment steps.
+- `CRON_SETUP.md` local scheduling guide.
+- `COST_CONTROL.md` cost notes for AWS resources.
 
-**Build mode (S3 deployment)**: The static app fetches from the API Gateway URL. No local API needed.
+**Model Details**
+- Model: scikit-learn `LogisticRegression` inside a pipeline with imputation and scaling.
+- Thresholding: tuned for high recall on late deliveries (minimizing false negatives).
+- Artifact: `artifacts/late_delivery_model.sav` (trained pipeline)
+- Artifact: `artifacts/model_metadata.json` (features, threshold, timestamps)
+- Artifact: `artifacts/metrics.json` (evaluation metrics)
 
-## App Features
+**ML Design Choices (For Students)**
+- **Problem framing**: binary classification where `late_delivery = 1` means the shipment arrived late. The pipeline predicts this class for *unfulfilled* orders so ops can prioritize.
+- **Train/serve parity**: feature engineering lives in `jobs/features.py` and is used by both ETL and inference to prevent training-serving skew.
+- **Feature rationale**:
+  - Order size/price signals: `num_items`, `total_value`, `avg_product_cost`, `num_distinct_products`.
+  - Timing signals: `order_dow`, `order_month`, `order_hour`.
+  - Customer signals: `customer_age`, `customer_order_count`.
+  - Cost signal: `shipping_fee`.
+- **Model choice**: logistic regression is fast, interpretable, and works well for tabular features; it’s a solid baseline for a production pipeline.
+- **Imputation + scaling**: median imputation handles missing values; standard scaling keeps coefficients comparable and stabilizes optimization.
+- **Evaluation split**: 75/25 train/test split with `stratify=y` to preserve class balance.
+- **Threshold strategy (cost-sensitive)**:
+  - Business goal: **high recall** on late deliveries (avoid missing late orders).
+  - Target recall: `0.90` for class 1 with minimum precision `0.10`.
+  - Threshold search grid: `0.10` → `0.90` in `0.05` steps.
+  - If target recall is unreachable, the highest recall with acceptable precision is chosen.
+- **Metrics reported**:
+  - Default threshold (0.5): accuracy, F1, ROC AUC, full classification report.
+  - Chosen threshold: precision/recall by class, F2 (recall-heavy), confusion matrix.
 
-1. **Select Customer** — Choose a customer for testing (no auth)
-2. **Place Order** — Add products, quantities; order is saved to shop.db (no shipment yet = unfulfilled)
-3. **Order History** — View orders for selected customer
-4. **Late Delivery Priority Queue** — Top 50 orders by late delivery probability
-5. **Run Scoring** — Triggers inference job, refreshes priority queue
+**Feature Set**
+`num_items`, `total_value`, `avg_product_cost`, `customer_age`, `customer_order_count`,
+`order_dow`, `order_month`, `order_hour`, `shipping_fee`, `num_distinct_products`
+
+**App Features**
+1. Select a customer and view their order history.
+2. Place new orders (stored in `shop.db`).
+3. View the late-delivery priority queue.
+4. Run scoring to refresh predictions.
+
+**Scheduling and Deployment**
+- Local cron: see `CRON_SETUP.md`.
+- AWS deployment: see `DEPLOY.md`.
+- Cloud scheduler runs daily at 1:00 AM UTC via EventBridge.
+
+**Suggested Walkthrough (Students)**
+1. Start at `jobs/run_scheduled_pipeline.py` to see the orchestration flow.
+2. Review `jobs/features.py` to understand feature parity between ETL and inference.
+3. Read `jobs/2_etl_build_warehouse.py` and compare to `jobs/4_run_inference.py`.
+4. Inspect `jobs/3_train_model.py` for evaluation metrics and threshold logic.
+5. Open `app/src/` to see how predictions are surfaced in the UI.
+
+**Notes for Recruiters**
+- The pipeline is fully reproducible from raw operational data to predictions.
+- Training and inference share feature logic to avoid training-serving skew.
+- The system is deployable as a serverless stack with a daily schedule.
+- The UI provides an operational workflow, not just a model demo.
+
+If you want a deeper walkthrough or a demo script, let me know.

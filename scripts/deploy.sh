@@ -24,19 +24,22 @@ else
   aws s3 cp artifacts/ "s3://${DATA_BUCKET}/artifacts/" --recursive 2>/dev/null || echo "No artifacts to upload"
 fi
 
-echo "=== 4. Build static app ==="
+echo "=== 4. Build static app (with API URL from SAM outputs) ==="
+STACK_NAME=$(grep 'stack_name' samconfig.toml 2>/dev/null | cut -d'"' -f2 || echo "ml-pipeline")
+API_BASE=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue" --output text 2>/dev/null || true)
+if [ -z "$API_BASE" ]; then
+  echo "WARNING: Could not get ApiBaseUrl from stack $STACK_NAME. Build will have empty API base."
+  echo "Run: aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].Outputs'"
+fi
 cd app
-npm run build
+echo "Building with NEXT_PUBLIC_API_BASE_URL=$API_BASE"
+NEXT_PUBLIC_API_BASE_URL="${API_BASE}" npm run build
 
-echo "=== 5. Get static bucket name and upload ==="
-STACK_NAME=$(grep 'stack_name' ../samconfig.toml 2>/dev/null | cut -d'"' -f2 || echo "ml-pipeline")
+echo "=== 5. Upload static app to S3 ==="
 STATIC_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
   --query "Stacks[0].Outputs[?OutputKey=='StaticBucketName'].OutputValue" --output text 2>/dev/null || true)
 if [ -n "$STATIC_BUCKET" ]; then
-  API_BASE=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-    --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue" --output text 2>/dev/null || true)
-  echo "Set NEXT_PUBLIC_API_BASE_URL=$API_BASE for static build"
-  NEXT_PUBLIC_API_BASE_URL="$API_BASE" npm run build
   aws s3 sync out/ "s3://${STATIC_BUCKET}/" --delete
   echo "Static site: http://${STATIC_BUCKET}.s3-website-${AWS_REGION:-us-east-1}.amazonaws.com"
 else

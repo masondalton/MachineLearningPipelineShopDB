@@ -30,6 +30,15 @@ aws s3 cp artifacts/ s3://YOUR_DATA_BUCKET/artifacts/ --recursive
 
 ## 3. Build and upload static app
 
+The build **must** use `NEXT_PUBLIC_API_BASE_URL` from SAM outputs; otherwise the app will call the wrong API (or same-origin, causing 404s).
+
+**Option A – Use the build script (recommended):**
+```bash
+./scripts/build-static.sh
+# Then upload app/out/ to your static bucket or Terraform-managed location
+```
+
+**Option B – Manual:**
 ```bash
 cd app
 
@@ -39,6 +48,8 @@ NEXT_PUBLIC_API_BASE_URL=https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.c
 # Upload to static bucket
 aws s3 sync out/ s3://YOUR_STATIC_BUCKET/ --delete
 ```
+
+If deploying to daltonforge.com/machinelearningpipeline via Terraform, run `./scripts/build-static.sh` first (it fetches ApiBaseUrl from CloudFormation), then copy `app/out/` into the location Terraform expects.
 
 ## 4. Enable static bucket website hosting (optional)
 
