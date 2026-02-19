@@ -20,13 +20,31 @@ export default function PriorityQueuePage() {
   const [rows, setRows] = useState<PriorityRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [scoring, setScoring] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchQueue = () => {
     setLoading(true);
+    setError(null);
     fetch(apiUrl("/priority-queue"))
-      .then((r) => r.json())
-      .then(setRows)
-      .catch(console.error)
+      .then(async (r) => {
+        const text = await r.text();
+        if (!r.ok) {
+          throw new Error(r.status === 404 ? "API endpoint not found. Check API configuration." : `API error: ${r.status}`);
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error("Invalid response from API");
+        }
+      })
+      .then((data) => {
+        setRows(Array.isArray(data) ? data : []);
+      })
+      .catch((e) => {
+        console.error(e);
+        setError(e instanceof Error ? e.message : "Failed to load priority queue");
+        setRows([]);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -88,6 +106,11 @@ export default function PriorityQueuePage() {
 
         {loading ? (
           <p className="text-slate-600">Loading...</p>
+        ) : error ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-amber-800">
+            <p className="font-medium">Error loading priority queue</p>
+            <p className="mt-2 text-sm">{error}</p>
+          </div>
         ) : rows.length === 0 ? (
           <div className="rounded-lg border border-slate-200 bg-white p-6 text-slate-600">
             <p className="font-medium text-slate-700">No predictions yet.</p>
@@ -110,7 +133,7 @@ export default function PriorityQueuePage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => (
+                {(Array.isArray(rows) ? rows : []).map((r, i) => (
                   <tr key={r.order_id} className="border-b border-slate-100 last:border-0">
                     <td className="p-3 text-slate-700">{i + 1}</td>
                     <td className="p-3 text-slate-700">{r.order_id}</td>
