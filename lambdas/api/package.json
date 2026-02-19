@@ -1,0 +1,10 @@
+{
+  "name": "ml-pipeline-api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-lambda": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "sql.js": "^1.10.0"
+  }
+}

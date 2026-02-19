@@ -1,0 +1,22 @@
+{
+  "model_name": "late_delivery_pipeline",
+  "model_version": "1.0.0",
+  "trained_at_utc": "2026-02-18T22:48:16.207852+00:00",
+  "warehouse_table": "fact_orders_ml",
+  "num_training_rows": 3750,
+  "num_test_rows": 1250,
+  "features": [
+    "num_items",
+    "total_value",
+    "avg_product_cost",
+    "customer_age",
+    "customer_order_count",
+    "order_dow",
+    "order_month",
+    "order_hour",
+    "shipping_fee",
+    "num_distinct_products"
+  ],
+  "label": "late_delivery",
+  "classification_threshold": 0.1
+}

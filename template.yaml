@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: ML Pipeline - S3 static site, API Lambda, Pipeline Lambda, EventBridge
+
+Parameters:
+  CorsOrigin:
+    Type: String
+    Default: "*"
+    Description: CORS allowed origin for API (use * or your CloudFront/static URL)
+
+Resources:
+  StaticBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "ml-pipeline-static-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  StaticBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: StaticBucket
+    Properties:
+      Bucket: !Ref StaticBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${StaticBucket.Arn}/*"
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "ml-pipeline-data-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ApiHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 5
+        ThrottlingRateLimit: 2
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref CorsOrigin
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+
+  ApiLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: lambdas/api/
+      Runtime: nodejs20.x
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          DATA_BUCKET: !Ref DataBucket
+          PIPELINE_LAMBDA_ARN: !GetAtt PipelineLambda.Arn
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt PipelineLambda.Arn
+      Events:
+        ApiRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiHttpApi
+            Path: /api/{proxy+}
+            Method: ANY
+
+  PipelineLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.handler
+      CodeUri: lambdas/pipeline/
+      Runtime: python3.12
+      Timeout: 900
+      MemorySize: 1024
+      Environment:
+        Variables:
+          DATA_BUCKET: !Ref DataBucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+    Metadata:
+      BuildMethod: makefile
+
+  PipelineSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Run ML pipeline at 1 AM UTC daily
+      ScheduleExpression: "cron(0 1 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Id: PipelineLambda
+          Arn: !GetAtt PipelineLambda.Arn
+          Input: "{}"
+
+  PipelineLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PipelineLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PipelineSchedule.Arn
+
+Outputs:
+  StaticBucketName:
+    Value: !Ref StaticBucket
+    Description: S3 bucket for static Next.js export
+  DataBucketName:
+    Value: !Ref DataBucket
+    Description: S3 bucket for shop.db, warehouse.db, artifacts
+  ApiEndpoint:
+    Value: !Sub "https://${ApiHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Description: API Gateway base URL
+  ApiBaseUrl:
+    Value: !Sub "https://${ApiHttpApi}.execute-api.${AWS::Region}.amazonaws.com/api"
+    Description: Set as NEXT_PUBLIC_API_BASE_URL when deploying static app
